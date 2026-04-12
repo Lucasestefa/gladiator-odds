@@ -1,0 +1,115 @@
+version: '3.9'
+
+services:
+
+  # ── Base de datos ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    container_name: gladiator_db
+    environment:
+      POSTGRES_DB: gladiator_odds
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-gladiator2024}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Cache + Queue ─────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: gladiator_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+
+  # ── Backend API ───────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gladiator_api
+    environment:
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-gladiator2024}@postgres:5432/gladiator_odds
+      REDIS_URL: redis://redis:6379
+      ODDS_API_KEY: ${ODDS_API_KEY}
+      BETFAIR_APP_KEY: ${BETFAIR_APP_KEY}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      MP_ACCESS_TOKEN: ${MP_ACCESS_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-change-in-production}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ── Frontend ──────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: gladiator_web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_STRIPE_KEY: ${STRIPE_PUBLISHABLE_KEY}
+      NEXT_PUBLIC_MP_PUBLIC_KEY: ${MP_PUBLIC_KEY}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # ── Bot scheduler (escaneo cada 5 min) ───────────────────────────────────
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gladiator_scheduler
+    environment:
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-gladiator2024}@postgres:5432/gladiator_odds
+      REDIS_URL: redis://redis:6379
+      ODDS_API_KEY: ${ODDS_API_KEY}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    depends_on:
+      - postgres
+      - redis
+      - backend
+    command: python -m app.scheduler
+
+  # ── n8n (GL3 - Gladiator Automate) ───────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: gladiator_n8n
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  postgres_data:
+  n8n_data:
