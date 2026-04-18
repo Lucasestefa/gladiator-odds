@@ -1,6 +1,29 @@
-backend/venv/
-backend/__pycache__/
-.env
+# Python
+__pycache__/
 *.pyc
-.DS_Store
+*.pyo
+backend/venv/
+backend/.env
+backend/app/**/__pycache__/
+*.backup
+
+# Node
 node_modules/
+.next/
+.vercel
+
+# System
+.DS_Store
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Env files
+.env
+.env.local
+.env.*.local
+
+# Test
+check.sh

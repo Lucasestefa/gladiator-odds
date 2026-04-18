@@ -4,12 +4,7 @@ FastAPI + PostgreSQL + Redis
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth, users, signals, platforms, betting, webhooks
-from app.core.config import settings
-from app.core.database import engine, Base
-
-# Crear tablas al iniciar
-Base.metadata.create_all(bind=engine)
+from app.api import signals
 
 app = FastAPI(
     title="Gladiator Odds API",
@@ -20,23 +15,18 @@ app = FastAPI(
 # CORS para el frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", settings.FRONTEND_URL],
+    allow_origins=["http://localhost:3000", "https://betscan-app.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Routers
-app.include_router(auth.router,      prefix="/api/auth",      tags=["Auth"])
-app.include_router(users.router,     prefix="/api/users",     tags=["Users"])
-app.include_router(signals.router,   prefix="/api/signals",   tags=["Signals"])
-app.include_router(platforms.router, prefix="/api/platforms", tags=["Platforms"])
-app.include_router(betting.router,   prefix="/api/betting",   tags=["Betting"])
-app.include_router(webhooks.router,  prefix="/api/webhooks",  tags=["Webhooks"])
+# Routers — solo signals por ahora (sin DB)
+app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
 
 @app.get("/")
 def root():
-    return {"status": "Gladiator Odds API online", "version": "1.0.0"}
+    return {"status": "BetScan API online", "version": "1.0.0"}
 
 @app.get("/health")
 def health():
