@@ -1,26 +1,7 @@
-# railway.toml — agregar al repo del backend
-# Este archivo va en la raíz de betscan-api
-
 [build]
 builder = "nixpacks"
 
-# ─── SERVICIO PRINCIPAL (ya existe) ───────────────────────
 [deploy]
-startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
-
-# ─── CRON JOB (nuevo) ─────────────────────────────────────
-# Corre cada hora en punto
-# Formato: minuto hora día mes día_semana
-[[cronJobs]]
-name    = "odds-snapshot-collector"
-command = "python odds_collector.py"
-schedule = "0 * * * *"   # cada hora exacta
-
-# Para empezar más frecuente durante los primeros días (cada 30 min):
-# schedule = "*/30 * * * *"
-
-# ─── ENV VARS (configurar en Railway Dashboard) ───────────
-# ODDS_API_KEY     = d6f8fe933e1192484e9fa3e47aee845b
-# DATABASE_URL     = postgresql://... (Supabase connection string)
