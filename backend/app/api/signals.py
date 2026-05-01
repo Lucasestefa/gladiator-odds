@@ -261,3 +261,109 @@ def cache_stats():
     if CACHE_AVAILABLE and cache:
         return cache.stats()
     return {"error": "cache not available"}
+# PEGAR AL FINAL DE signals.py (antes del cache/stats)
+
+class UpcomingEvent(BaseModel):
+    id: str
+    sport: str
+    competition: str
+    home: str
+    away: str
+    homeCode: str
+    awayCode: str
+    kickoff: str
+    bookmakers_count: int
+
+@router.get("/upcoming", response_model=list)
+async def get_upcoming():
+    """Eventos proximos 60 dias para los 4 deportes principales."""
+    sports = [
+        "soccer_england_premier_league",
+        "soccer_spain_la_liga",
+        "soccer_uefa_champs_league",
+        "soccer_argentina_primera_division",
+        "soccer_brazil_campeonato",
+        "basketball_nba",
+        "tennis_atp_french_open",
+        "boxing_boxing",
+        "mma_mixed_martial_arts",
+    ]
+    sport_label_map = {
+        "soccer_england_premier_league": "football",
+        "soccer_spain_la_liga": "football",
+        "soccer_uefa_champs_league": "football",
+        "soccer_argentina_primera_division": "football",
+        "soccer_brazil_campeonato": "football",
+        "basketball_nba": "basketball",
+        "tennis_atp_french_open": "tennis",
+        "boxing_boxing": "boxing",
+        "mma_mixed_martial_arts": "mma",
+    }
+    comp_label_map = {
+        "soccer_england_premier_league": "Premier League",
+        "soccer_spain_la_liga": "La Liga",
+        "soccer_uefa_champs_league": "Champions League",
+        "soccer_argentina_primera_division": "Liga Argentina",
+        "soccer_brazil_campeonato": "Brasileirao",
+        "basketball_nba": "NBA",
+        "tennis_atp_french_open": "Roland Garros",
+        "boxing_boxing": "Boxeo",
+        "mma_mixed_martial_arts": "MMA/UFC",
+    }
+
+    events_out = []
+    if REAL_SERVICE_AVAILABLE:
+        try:
+            import httpx, os
+            from app.core.config import settings as cfg
+            async with httpx.AsyncClient() as client:
+                for sport_key in sports:
+                    try:
+                        resp = await client.get(
+                            f"{cfg.ODDS_API_URL}/sports/{sport_key}/events",
+                            params={"apiKey": cfg.ODDS_API_KEY},
+                            timeout=8.0,
+                        )
+                        if resp.status_code != 200:
+                            continue
+                        data = resp.json()
+                        for ev in data[:10]:
+                            home = ev.get("home_team", "")
+                            away = ev.get("away_team", "")
+                            commence = ev.get("commence_time", "")
+                            words_h = [w for w in home.split() if w and w[0].isalpha()]
+                            words_a = [w for w in away.split() if w and w[0].isalpha()]
+                            hcode = (words_h[0][0] + words_h[1][:2]).upper() if len(words_h) >= 2 else home[:3].upper()
+                            acode = (words_a[0][0] + words_a[1][:2]).upper() if len(words_a) >= 2 else away[:3].upper()
+                            events_out.append({
+                                "id": ev.get("id", ""),
+                                "sport": sport_label_map.get(sport_key, sport_key),
+                                "competition": comp_label_map.get(sport_key, sport_key),
+                                "home": home,
+                                "away": away,
+                                "homeCode": hcode,
+                                "awayCode": acode,
+                                "kickoff": commence,
+                                "bookmakers_count": 0,
+                            })
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    # Fallback mock si no hay datos reales
+    if not events_out:
+        from datetime import timedelta
+        now = datetime.utcnow()
+        events_out = [
+            {"id":"u1","sport":"football","competition":"Champions League","home":"Real Madrid","away":"Arsenal","homeCode":"RMA","awayCode":"ARS","kickoff":(now+timedelta(days=3)).isoformat(),"bookmakers_count":18},
+            {"id":"u2","sport":"football","competition":"Premier League","home":"Manchester City","away":"Chelsea","homeCode":"MCI","awayCode":"CFC","kickoff":(now+timedelta(days=5)).isoformat(),"bookmakers_count":20},
+            {"id":"u3","sport":"basketball","competition":"NBA","home":"Boston Celtics","away":"Miami Heat","homeCode":"BOS","awayCode":"MIA","kickoff":(now+timedelta(days=2)).isoformat(),"bookmakers_count":15},
+            {"id":"u4","sport":"tennis","competition":"Roland Garros","home":"Carlos Alcaraz","away":"Jannik Sinner","homeCode":"ALC","awayCode":"SIN","kickoff":(now+timedelta(days=7)).isoformat(),"bookmakers_count":12},
+            {"id":"u5","sport":"boxing","competition":"Boxeo","home":"Canelo Alvarez","away":"David Benavidez","homeCode":"CAN","awayCode":"DBE","kickoff":(now+timedelta(days=14)).isoformat(),"bookmakers_count":22},
+            {"id":"u6","sport":"football","competition":"Liga Argentina","home":"Boca Juniors","away":"River Plate","homeCode":"BOC","awayCode":"RIV","kickoff":(now+timedelta(days=4)).isoformat(),"bookmakers_count":10},
+            {"id":"u7","sport":"mma","competition":"MMA/UFC","home":"Israel Adesanya","away":"Alex Pereira","homeCode":"ISA","awayCode":"APE","kickoff":(now+timedelta(days=10)).isoformat(),"bookmakers_count":18},
+            {"id":"u8","sport":"football","competition":"Brasileirao","home":"Flamengo","away":"Palmeiras","homeCode":"FLA","awayCode":"PAL","kickoff":(now+timedelta(days=6)).isoformat(),"bookmakers_count":8},
+        ]
+
+    return events_out
