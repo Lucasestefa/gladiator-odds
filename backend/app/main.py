@@ -15,7 +15,7 @@ app = FastAPI(
 # CORS para el frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://betscan-app.vercel.app"],
+    allow_origins=["http://localhost:3000", "https://betscan-app.vercel.app", "https://betscan-api-production.up.railway.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
