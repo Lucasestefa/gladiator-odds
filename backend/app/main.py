@@ -87,3 +87,4 @@ async def get_trades():
 @app.get("/api/bot/equity")
 async def get_equity():
     return {"equity": bot.portfolio.equity_curve}
+# redeploy Sat May  2 13:14:08 -05 2026
