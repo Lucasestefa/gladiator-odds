@@ -2,6 +2,7 @@
 Gladiator Odds — Backend Principal
 FastAPI + PostgreSQL + Redis
 """
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import signals
@@ -15,13 +16,13 @@ app = FastAPI(
 # CORS para el frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://betscan-app.vercel.app", "https://betscan-api-production.up.railway.app"],
+    allow_origins=["http://localhost:3000", "https://betscan-app.vercel.app", "https://betscan-api-production.up.railway.app", "https://www.betscan.online"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Routers — solo signals por ahora (sin DB)
+# Routers
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
 
 @app.get("/")
@@ -33,44 +34,64 @@ def health():
     return {"status": "ok"}
 
 # ================================================================
-# TRADING BOT — endpoints de control
+# TRADING BOT — import protegido
 # ================================================================
-from app.trading_bot import bot
-import asyncio
+try:
+    from app.trading_bot import bot
+    BOT_AVAILABLE = True
+    print("[BOT] Import exitoso ✅")
+except Exception as e:
+    print(f"[BOT] Import error: {e}")
+    BOT_AVAILABLE = False
+    bot = None
 
 @app.on_event("startup")
 async def start_bot():
-    # Delay de 30 segundos para que Railway confirme el health check primero
+    if not BOT_AVAILABLE or bot is None:
+        print("[BOT] No disponible — saltando startup")
+        return
     async def delayed_start():
-        await asyncio.sleep(30)
+        await asyncio.sleep(60)
         await bot.start(interval_minutes=60)
     asyncio.create_task(delayed_start())
 
 @app.get("/api/bot/status")
 async def bot_status():
+    if not BOT_AVAILABLE or bot is None:
+        return {"running": False, "bot_available": False, "error": "Bot no disponible — revisar logs de Railway"}
     return {
-        "running":    bot.running,
-        "summary":    bot.portfolio.get_summary(),
-        "fear_greed": bot.fear_greed,
-        "cycle":      bot.cycle_count,
+        "running":       bot.running,
+        "bot_available": True,
+        "summary":       bot.portfolio.get_summary(),
+        "fear_greed":    bot.fear_greed,
+        "cycle":         bot.cycle_count,
     }
 
 @app.post("/api/bot/cycle")
 async def run_cycle_manual():
-    return bot.run_cycle()
+    if not BOT_AVAILABLE or bot is None:
+        return {"error": "Bot no disponible"}
+    result = bot.run_cycle()
+    return result
 
 @app.post("/api/bot/pause")
 async def pause_bot(reason: str = "Pausa manual"):
+    if not BOT_AVAILABLE or bot is None:
+        return {"error": "Bot no disponible"}
     bot.portfolio.pause(reason)
     return {"status": "paused", "reason": reason}
 
 @app.post("/api/bot/resume")
 async def resume_bot():
+    if not BOT_AVAILABLE or bot is None:
+        return {"error": "Bot no disponible"}
     bot.portfolio.resume()
     return {"status": "running"}
 
 @app.post("/api/bot/reset")
 async def reset_portfolio():
+    if not BOT_AVAILABLE or bot is None:
+        return {"error": "Bot no disponible"}
     from app.trading_bot import Portfolio
     bot.portfolio   = Portfolio()
     bot.last_prices = {}
@@ -78,13 +99,18 @@ async def reset_portfolio():
 
 @app.get("/api/bot/signals")
 async def get_signals():
+    if not BOT_AVAILABLE or bot is None:
+        return {"signals": []}
     return {"signals": bot.last_signals}
 
 @app.get("/api/bot/trades")
 async def get_trades():
+    if not BOT_AVAILABLE or bot is None:
+        return {"trades": []}
     return {"trades": bot.portfolio.trades}
 
 @app.get("/api/bot/equity")
 async def get_equity():
+    if not BOT_AVAILABLE or bot is None:
+        return {"equity": [50000]}
     return {"equity": bot.portfolio.equity_curve}
-# redeploy Sat May  2 13:14:08 -05 2026
