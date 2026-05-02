@@ -40,3 +40,8 @@ apscheduler==3.10.4
 python-dotenv==1.0.0
 pydantic==2.6.0
 psycopg2-binary==2.9.9
+
+# Trading Bot
+requests==2.31.0
+beautifulsoup4==4.12.3
+lxml==5.1.0
