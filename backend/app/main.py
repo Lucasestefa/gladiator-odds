@@ -63,7 +63,7 @@ async def bot_status():
         "running":       bot.running,
         "bot_available": True,
         "summary":       bot.portfolio.get_summary(),
-        "fear_greed":    bot.fear_greed,
+        "fear_greed":    bot.macro.get("fear_greed", 0) if bot.macro else 0,
         "cycle":         bot.cycle_count,
     }
 
