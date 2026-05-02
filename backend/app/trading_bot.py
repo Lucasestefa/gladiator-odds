@@ -1,36 +1,38 @@
 """
-BetScan Trading Bot — Motor de Inteligencia v2.0
+BetScan Trading Bot — Motor de Inteligencia v3.0
 =================================================
+NOVEDADES v3:
+  ✅ Universo dinámico de 50 activos por ciclo (market_scraper)
+  ✅ Scraping automático: USA stocks + LATAM + Crypto + Forex
+  ✅ Selección por volumen + momentum + sector fuerte del día
+  ✅ Ya no hay lista fija de activos — el bot caza oportunidades en tiempo real
+
 Variables integradas:
   Análisis Técnico:
     ✅ RSI contextual (40-45 alcista / 55-60 bajista / 30-70 lateral)
     ✅ MACD (momentum + cruces de señal)
     ✅ Divergencias alcistas y bajistas
-    ✅ Medias móviles MA50 + MA200 (tendencia)
-    ✅ EMA12 + EMA26 (momentum corto)
-    ✅ Soporte y resistencia (mínimos/máximos + Fibonacci)
+    ✅ Medias móviles MA50 + MA200
     ✅ Niveles de Fibonacci (23.6%, 38.2%, 50%, 61.8%, 78.6%)
     ✅ VWAP (precio justo institucional)
     ✅ Volumen confirmado vs promedio 20 días
     ✅ Múltiples timeframes (Diario + 4 horas)
+    ✅ Régimen de mercado Wyckoff
 
   Contexto Macro:
-    ✅ Fear & Greed Index (Alternative.me)
-    ✅ VIX — índice de volatilidad (AlphaVantage)
-    ✅ DXY — índice del dólar (AlphaVantage)
-    ✅ SPY — proxy apetito de riesgo (AlphaVantage)
+    ✅ Fear & Greed Index
+    ✅ VIX — índice de volatilidad
+    ✅ SPY — proxy apetito de riesgo global
     ✅ Funding Rate crypto (Binance API pública)
     ✅ Open Interest (Binance API pública)
-    ✅ Régimen de mercado (Wyckoff simplificado)
 
   Gestión de Riesgo:
     ✅ Stop loss fijo -3%
     ✅ Take profit +7% (ratio 1:2.3)
     ✅ Trailing stop desde +5%
-    ✅ Kelly Criterion dinámico
-    ✅ Tamaño ajustado por volatilidad
+    ✅ Kelly Criterion dinámico (activo tras 20 trades)
 
-  Psicología (7 filtros):
+  Psicología (9 filtros):
     ✅ Anti revenge trading (límite diario 6%)
     ✅ Anti racha negativa (pausa 3 pérdidas)
     ✅ Anti averaging down
@@ -38,12 +40,8 @@ Variables integradas:
     ✅ Anti overtrading (máx 5 posiciones)
     ✅ Anti euforia (Fear & Greed > 80)
     ✅ Límite mensual 15%
-
-Fuentes de datos (todas gratuitas, sin registro):
-  - CryptoCompare  → OHLCV crypto (diario + 4h)
-  - AlphaVantage   → stocks + forex + VIX + DXY
-  - Binance API    → funding rate + open interest
-  - Alternative.me → Fear & Greed Index
+    ✅ Macro DANGER (VIX > 40)
+    ✅ Funding rate sobrecargado
 """
 
 import os
@@ -54,6 +52,14 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import requests
+
+# ---- Importar el scraper de universo dinámico ------------------
+try:
+    from app.market_scraper import universe_builder
+    DYNAMIC_UNIVERSE = True
+except ImportError:
+    DYNAMIC_UNIVERSE = False
+    logging.warning("[BOT] market_scraper no disponible — usando universo fijo")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -74,13 +80,11 @@ STOP_LOSS_PCT        = 0.03
 TAKE_PROFIT_PCT      = 0.07
 TRAILING_ACTIVATE_AT = 0.05
 TRAILING_STOP_PCT    = 0.02
-MAX_POSITION_PCT     = 0.20   # Kelly nunca supera 20% del capital
+MAX_POSITION_PCT     = 0.20
 
-# ---- Score mínimo ---------------------------------------------
-# Ahora tenemos más condiciones → subimos el mínimo a 4/8
-MIN_SIGNAL_SCORE  = 4
-SCORE_STRONG_BUY  = 6   # 6+ condiciones → STRONG_BUY (10%)
-SCORE_BUY         = 4   # 4-5 condiciones → BUY (5%)
+# ---- Score ----------------------------------------------------
+MIN_SIGNAL_SCORE = 4
+SCORE_STRONG_BUY = 6
 
 # ---- Psicología -----------------------------------------------
 MAX_OPEN_POSITIONS     = 5
@@ -91,11 +95,11 @@ MAX_ENTRY_FROM_SUPPORT = 0.03
 FEAR_GREED_EUFORIA     = 80
 FEAR_GREED_PANICO      = 20
 
-# ---- Macro thresholds -----------------------------------------
-VIX_HIGH      = 30    # VIX > 30 = miedo extremo → reducir exposición
-VIX_VERY_HIGH = 40    # VIX > 40 = pánico → no operar
-FUNDING_HIGH  = 0.01  # funding rate > 1% = mercado sobrecargado long
-FUNDING_LOW   = -0.005 # funding rate < -0.5% = mercado sobrecargado short
+# ---- Macro ----------------------------------------------------
+VIX_HIGH      = 30
+VIX_VERY_HIGH = 40
+FUNDING_HIGH  = 0.01
+FUNDING_LOW   = -0.005
 
 # ---- RSI zonas ------------------------------------------------
 RSI_BUY_BULLISH  = (40, 45)
@@ -103,20 +107,18 @@ RSI_SELL_BEARISH = (55, 60)
 RSI_BUY_LATERAL  = 30
 RSI_SELL_LATERAL = 70
 
-# ---- Universo de activos --------------------------------------
-CRYPTO_SYMBOLS = ["BTC", "ETH", "SOL", "BNB"]
-STOCK_SYMBOLS  = ["AAPL", "NVDA", "SPY", "TSLA"]
-FOREX_PAIRS    = [("EUR", "USD"), ("GBP", "USD")]
+# ---- Universo FIJO (fallback si el scraper falla) -------------
+CRYPTO_SYMBOLS_DEFAULT = ["BTC", "ETH", "SOL", "BNB", "AVAX", "MATIC"]
+STOCK_SYMBOLS_DEFAULT  = ["AAPL", "NVDA", "SPY", "TSLA", "MSFT", "AVGO", "MELI", "YPF"]
+FOREX_PAIRS_DEFAULT    = [("EUR", "USD"), ("GBP", "USD"), ("USD", "JPY")]
 
-# Mapeo símbolo → Binance para funding rate
+# Mapeo Binance para funding rate
 BINANCE_MAP = {
-    "BTC": "BTCUSDT",
-    "ETH": "ETHUSDT",
-    "SOL": "SOLUSDT",
-    "BNB": "BNBUSDT",
+    "BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT",
+    "BNB": "BNBUSDT", "AVAX": "AVAXUSDT", "MATIC": "MATICUSDT",
+    "LINK": "LINKUSDT", "DOT": "DOTUSDT", "ADA": "ADAUSDT",
 }
 
-# Fibonacci levels
 FIB_LEVELS = [0.236, 0.382, 0.500, 0.618, 0.786]
 
 
@@ -126,8 +128,6 @@ FIB_LEVELS = [0.236, 0.382, 0.500, 0.618, 0.786]
 
 class DataFetcher:
 
-    # ---- Crypto ------------------------------------------------
-
     def get_crypto_ohlcv_daily(self, symbol: str, limit: int = 200) -> List[dict]:
         url = "https://min-api.cryptocompare.com/data/v2/histoday"
         params = {"fsym": symbol, "tsym": "USDT", "limit": limit}
@@ -136,7 +136,7 @@ class DataFetcher:
             r = requests.get(url, params=params, headers=headers, timeout=10)
             return r.json().get("Data", {}).get("Data", [])
         except Exception as e:
-            logging.error(f"CryptoCompare daily error [{symbol}]: {e}")
+            logging.error(f"CryptoCompare daily [{symbol}]: {e}")
             return []
 
     def get_crypto_ohlcv_4h(self, symbol: str, limit: int = 100) -> List[dict]:
@@ -147,16 +147,13 @@ class DataFetcher:
             r = requests.get(url, params=params, headers=headers, timeout=10)
             return r.json().get("Data", {}).get("Data", [])
         except Exception as e:
-            logging.error(f"CryptoCompare 4h error [{symbol}]: {e}")
+            logging.error(f"CryptoCompare 4h [{symbol}]: {e}")
             return []
 
-    # ---- Stocks + Macro ----------------------------------------
-
     def get_alphavantage(self, params: dict) -> dict:
-        """Llamada genérica a AlphaVantage con delay para evitar rate limit"""
         params["apikey"] = ALPHAVANTAGE_KEY
         try:
-            time.sleep(15)   # AlphaVantage free: 5 calls/min
+            time.sleep(15)
             r = requests.get("https://www.alphavantage.co/query", params=params, timeout=15)
             return r.json()
         except Exception as e:
@@ -169,14 +166,14 @@ class DataFetcher:
         result = []
         for date in sorted(ts.keys()):
             v = ts[date]
-            result.append({
-                "time":   date,
-                "open":   float(v["1. open"]),
-                "high":   float(v["2. high"]),
-                "low":    float(v["3. low"]),
-                "close":  float(v["4. close"]),
-                "volume": float(v["5. volume"]),
-            })
+            try:
+                result.append({
+                    "time": date, "open": float(v["1. open"]),
+                    "high": float(v["2. high"]), "low": float(v["3. low"]),
+                    "close": float(v["4. close"]), "volume": float(v["5. volume"]),
+                })
+            except:
+                continue
         return result
 
     def get_forex_ohlcv(self, from_sym: str, to_sym: str) -> List[dict]:
@@ -185,36 +182,24 @@ class DataFetcher:
         result = []
         for date in sorted(ts.keys()):
             v = ts[date]
-            result.append({
-                "time":   date,
-                "open":   float(v["1. open"]),
-                "high":   float(v["2. high"]),
-                "low":    float(v["3. low"]),
-                "close":  float(v["4. close"]),
-                "volume": 0.0,
-            })
+            try:
+                result.append({
+                    "time": date, "open": float(v["1. open"]),
+                    "high": float(v["2. high"]), "low": float(v["3. low"]),
+                    "close": float(v["4. close"]), "volume": 0.0,
+                })
+            except:
+                continue
         return result
 
     def get_vix(self) -> float:
-        """VIX desde AlphaVantage — índice de volatilidad del mercado"""
         data = self.get_alphavantage({"function": "TIME_SERIES_DAILY", "symbol": "VIX"})
         ts = data.get("Time Series (Daily)", {})
         if not ts:
-            return 20.0  # valor neutral como fallback
-        latest = sorted(ts.keys())[-1]
-        return float(ts[latest]["4. close"])
-
-    def get_dxy(self) -> float:
-        """DXY — índice del dólar (correlación inversa con crypto y commodities)"""
-        data = self.get_alphavantage({"function": "TIME_SERIES_DAILY", "symbol": "DXY"})
-        ts = data.get("Time Series (Daily)", {})
-        if not ts:
-            return 100.0
-        latest = sorted(ts.keys())[-1]
-        return float(ts[latest]["4. close"])
+            return 20.0
+        return float(ts[sorted(ts.keys())[-1]]["4. close"])
 
     def get_spy_trend(self) -> str:
-        """SPY como proxy del apetito de riesgo global"""
         raw = self.get_stock_ohlcv("SPY")
         if len(raw) < 50:
             return "UNDEFINED"
@@ -227,38 +212,34 @@ class DataFetcher:
             return "RISK_OFF"
         return "NEUTRAL"
 
-    # ---- Binance API pública (sin cuenta, sin key) -------------
-
     def get_funding_rate(self, symbol: str) -> float:
-        """Funding rate actual de futuros perpetuos en Binance"""
         binance_sym = BINANCE_MAP.get(symbol)
         if not binance_sym:
             return 0.0
         try:
-            url = f"https://fapi.binance.com/fapi/v1/fundingRate"
-            params = {"symbol": binance_sym, "limit": 1}
-            r = requests.get(url, params=params, timeout=5)
+            r = requests.get(
+                "https://fapi.binance.com/fapi/v1/fundingRate",
+                params={"symbol": binance_sym, "limit": 1}, timeout=5
+            )
             data = r.json()
             if data and isinstance(data, list):
                 return float(data[-1].get("fundingRate", 0))
-        except Exception as e:
-            logging.error(f"Binance funding rate error [{symbol}]: {e}")
+        except:
+            pass
         return 0.0
 
     def get_open_interest(self, symbol: str) -> dict:
-        """Open interest de futuros en Binance — mide convicción del mercado"""
         binance_sym = BINANCE_MAP.get(symbol)
         if not binance_sym:
             return {}
         try:
-            url = "https://fapi.binance.com/fapi/v1/openInterest"
-            r = requests.get(url, params={"symbol": binance_sym}, timeout=5)
+            r = requests.get(
+                "https://fapi.binance.com/fapi/v1/openInterest",
+                params={"symbol": binance_sym}, timeout=5
+            )
             return r.json()
-        except Exception as e:
-            logging.error(f"Binance open interest error [{symbol}]: {e}")
+        except:
             return {}
-
-    # ---- Sentimiento general -----------------------------------
 
     def get_fear_greed(self) -> int:
         try:
@@ -274,8 +255,6 @@ class DataFetcher:
 
 class TechnicalAnalysis:
 
-    # ---- Medias ------------------------------------------------
-
     def ema(self, data: List[float], period: int) -> List[float]:
         if len(data) < period:
             return []
@@ -289,8 +268,6 @@ class TechnicalAnalysis:
         if len(data) < period:
             return []
         return [sum(data[i-period:i]) / period for i in range(period, len(data) + 1)]
-
-    # ---- RSI ---------------------------------------------------
 
     def rsi(self, closes: List[float], period: int = 14) -> List[float]:
         if len(closes) < period + 1:
@@ -309,7 +286,6 @@ class TechnicalAnalysis:
         return result
 
     def rsi_zone(self, rsi_val: float, trend: str) -> str:
-        """Clasifica el RSI según el contexto de tendencia"""
         if trend == "BULLISH":
             if RSI_BUY_BULLISH[0] <= rsi_val <= RSI_BUY_BULLISH[1]:
                 return "BUY_ZONE"
@@ -323,41 +299,24 @@ class TechnicalAnalysis:
                 return "SELL_ZONE"
         return "NEUTRAL"
 
-    # ---- MACD --------------------------------------------------
-
     def macd(self, closes: List[float], fast=12, slow=26, signal=9) -> dict:
-        """
-        Retorna:
-          macd_line    : diferencia EMA12 - EMA26
-          signal_line  : EMA9 del macd_line
-          histogram    : macd_line - signal_line
-          cross_up     : True si macd cruzó señal hacia arriba (BUY)
-          cross_down   : True si macd cruzó señal hacia abajo (SELL)
-        """
         if len(closes) < slow + signal:
             return {}
-        ema_fast   = self.ema(closes, fast)
-        ema_slow   = self.ema(closes, slow)
-        min_len    = min(len(ema_fast), len(ema_slow))
-        macd_line  = [ema_fast[-min_len+i] - ema_slow[-min_len+i] for i in range(min_len)]
-        sig_line   = self.ema(macd_line, signal)
+        ema_fast  = self.ema(closes, fast)
+        ema_slow  = self.ema(closes, slow)
+        min_len   = min(len(ema_fast), len(ema_slow))
+        macd_line = [ema_fast[-min_len+i] - ema_slow[-min_len+i] for i in range(min_len)]
+        sig_line  = self.ema(macd_line, signal)
         if len(sig_line) < 2:
             return {}
         hist       = [macd_line[-len(sig_line)+i] - sig_line[i] for i in range(len(sig_line))]
-        cross_up   = sig_line[-2] > macd_line[-len(sig_line)+len(sig_line)-2] and \
-                     sig_line[-1] < macd_line[-1]
-        cross_down = sig_line[-2] < macd_line[-len(sig_line)+len(sig_line)-2] and \
-                     sig_line[-1] > macd_line[-1]
+        cross_up   = sig_line[-2] > macd_line[-len(sig_line)-2] and sig_line[-1] < macd_line[-1]
+        cross_down = sig_line[-2] < macd_line[-len(sig_line)-2] and sig_line[-1] > macd_line[-1]
         return {
-            "macd":       round(macd_line[-1], 6),
-            "signal":     round(sig_line[-1], 6),
-            "histogram":  round(hist[-1], 6),
-            "cross_up":   cross_up,
-            "cross_down": cross_down,
-            "bullish":    macd_line[-1] > sig_line[-1],
+            "macd": round(macd_line[-1], 6), "signal": round(sig_line[-1], 6),
+            "histogram": round(hist[-1], 6), "cross_up": cross_up,
+            "cross_down": cross_down, "bullish": macd_line[-1] > sig_line[-1],
         }
-
-    # ---- Tendencia ---------------------------------------------
 
     def trend(self, closes: List[float]) -> str:
         if len(closes) < 200:
@@ -372,85 +331,54 @@ class TechnicalAnalysis:
             return "BEARISH"
         return "LATERAL"
 
-    # ---- Régimen de mercado (Wyckoff simplificado) -------------
-
     def market_regime(self, closes: List[float], volumes: List[float]) -> str:
-        """
-        Detecta la fase del ciclo de Wyckoff:
-          ACUMULACION  : precio lateral + volumen decreciente (dinero inteligente comprando)
-          EXPANSION    : precio sube + volumen creciente (todos se dan cuenta)
-          DISTRIBUCION : precio lateral en máximos + volumen decreciente (dinero inteligente vendiendo)
-          CONTRACCION  : precio baja + volumen creciente (pánico)
-        """
         if len(closes) < 30 or len(volumes) < 30:
             return "UNDEFINED"
-
-        recent_closes  = closes[-30:]
-        recent_volumes = volumes[-30:]
-
-        price_range = (max(recent_closes) - min(recent_closes)) / min(recent_closes)
-        vol_trend   = sum(recent_volumes[-10:]) / 10 - sum(recent_volumes[:10]) / 10
-        price_trend = recent_closes[-1] - recent_closes[0]
-
-        if price_range < 0.05 and vol_trend < 0 and recent_closes[-1] < sum(recent_closes) / len(recent_closes):
+        rc = closes[-30:]
+        rv = volumes[-30:]
+        price_range = (max(rc) - min(rc)) / max(min(rc), 0.0001)
+        vol_trend   = sum(rv[-10:]) / 10 - sum(rv[:10]) / 10
+        price_trend = rc[-1] - rc[0]
+        avg_price   = sum(rc) / len(rc)
+        if price_range < 0.05 and vol_trend < 0 and rc[-1] < avg_price:
             return "ACUMULACION"
         if price_trend > 0 and vol_trend > 0:
             return "EXPANSION"
-        if price_range < 0.05 and vol_trend < 0 and recent_closes[-1] > sum(recent_closes) / len(recent_closes):
+        if price_range < 0.05 and vol_trend < 0 and rc[-1] > avg_price:
             return "DISTRIBUCION"
         if price_trend < 0 and vol_trend > 0:
             return "CONTRACCION"
         return "INDEFINIDO"
 
-    # ---- Fibonacci ---------------------------------------------
-
     def fibonacci_levels(self, closes: List[float], lookback: int = 50) -> dict:
-        """
-        Calcula niveles de retroceso de Fibonacci del último swing.
-        En tendencia alcista: swing low → swing high
-        """
         if len(closes) < lookback:
             lookback = len(closes)
-        recent   = closes[-lookback:]
-        swing_low  = min(recent)
-        swing_high = max(recent)
-        diff       = swing_high - swing_low
-
-        levels = {}
-        for fib in FIB_LEVELS:
-            levels[f"fib_{int(fib*1000)}"] = round(swing_high - diff * fib, 6)
-
+        recent = closes[-lookback:]
+        swing_low, swing_high = min(recent), max(recent)
+        diff = swing_high - swing_low
+        levels = {f"fib_{int(f*1000)}": round(swing_high - diff * f, 6) for f in FIB_LEVELS}
         levels["swing_low"]  = swing_low
         levels["swing_high"] = swing_high
         return levels
 
     def price_at_fibonacci(self, price: float, fib_levels: dict, tolerance: float = 0.015) -> Optional[float]:
-        """Retorna el nivel Fibonacci más cercano si el precio está dentro del rango de tolerancia"""
         for key, level in fib_levels.items():
             if key in ("swing_low", "swing_high"):
                 continue
-            if abs(price - level) / level <= tolerance:
+            if level > 0 and abs(price - level) / level <= tolerance:
                 return float(key.replace("fib_", "")) / 1000
         return None
 
-    # ---- VWAP --------------------------------------------------
-
     def vwap(self, highs: List[float], lows: List[float], closes: List[float], volumes: List[float]) -> float:
-        """Precio promedio ponderado por volumen — referencia institucional"""
         if not volumes or sum(volumes) == 0:
             return closes[-1] if closes else 0
-        typical_prices = [(h + l + c) / 3 for h, l, c in zip(highs, lows, closes)]
-        total_vol = sum(volumes)
-        vwap_val  = sum(tp * v for tp, v in zip(typical_prices, volumes)) / total_vol
-        return round(vwap_val, 6)
-
-    # ---- Soporte y Resistencia ---------------------------------
+        typical = [(h + l + c) / 3 for h, l, c in zip(highs, lows, closes)]
+        total_v = sum(volumes)
+        return round(sum(tp * v for tp, v in zip(typical, volumes)) / total_v, 6)
 
     def support_resistance(self, closes: List[float], window: int = 20) -> Tuple[float, float]:
         recent = closes[-window:] if len(closes) >= window else closes
         return min(recent), max(recent)
-
-    # ---- Volumen -----------------------------------------------
 
     def volume_above_average(self, volumes: List[float], multiplier: float = 1.1) -> bool:
         if len(volumes) < 21:
@@ -458,73 +386,51 @@ class TechnicalAnalysis:
         avg = sum(volumes[-21:-1]) / 20
         return volumes[-1] > avg * multiplier if avg > 0 else False
 
-    # ---- Divergencias ------------------------------------------
-
     def divergence(self, closes: List[float], rsi_vals: List[float], lookback: int = 20) -> str:
         if len(closes) < lookback or len(rsi_vals) < lookback:
             return "NONE"
-        rc = closes[-lookback:]
-        rr = rsi_vals[-lookback:]
-        price_mins, rsi_mins, price_maxs, rsi_maxs = [], [], [], []
+        rc, rr = closes[-lookback:], rsi_vals[-lookback:]
+        pmins, rmins, pmaxs, rmaxs = [], [], [], []
         for i in range(1, len(rc) - 1):
             if rc[i] < rc[i-1] and rc[i] < rc[i+1]:
-                price_mins.append(rc[i])
-                rsi_mins.append(rr[i])
+                pmins.append(rc[i]); rmins.append(rr[i])
             if rc[i] > rc[i-1] and rc[i] > rc[i+1]:
-                price_maxs.append(rc[i])
-                rsi_maxs.append(rr[i])
-        if len(price_mins) >= 2 and len(rsi_mins) >= 2:
-            if price_mins[-1] < price_mins[-2] and rsi_mins[-1] > rsi_mins[-2]:
-                return "BULLISH"
-        if len(price_maxs) >= 2 and len(rsi_maxs) >= 2:
-            if price_maxs[-1] > price_maxs[-2] and rsi_maxs[-1] < rsi_maxs[-2]:
-                return "BEARISH"
+                pmaxs.append(rc[i]); rmaxs.append(rr[i])
+        if len(pmins) >= 2 and pmins[-1] < pmins[-2] and rmins[-1] > rmins[-2]:
+            return "BULLISH"
+        if len(pmaxs) >= 2 and pmaxs[-1] > pmaxs[-2] and rmaxs[-1] < rmaxs[-2]:
+            return "BEARISH"
         return "NONE"
 
-    # ---- Análisis completo de un timeframe ---------------------
-
     def full_analysis(self, ohlcv: List[dict], symbol: str = "") -> dict:
-        """Corre todos los indicadores sobre un set de velas OHLCV"""
         if not ohlcv or len(ohlcv) < 30:
             return {"valid": False}
-
-        closes  = [d["close"]  for d in ohlcv if d.get("close")]
-        highs   = [d.get("high", d["close"])  for d in ohlcv]
-        lows    = [d.get("low", d["close"])   for d in ohlcv]
+        closes  = [d["close"] for d in ohlcv if d.get("close")]
+        highs   = [d.get("high", d["close"]) for d in ohlcv]
+        lows    = [d.get("low", d["close"]) for d in ohlcv]
         volumes = [d.get("volumeto", d.get("volume", 0)) for d in ohlcv]
-
-        rsi_vals   = self.rsi(closes)
-        macd_data  = self.macd(closes)
-        trend_val  = self.trend(closes)
-        regime     = self.market_regime(closes, volumes)
-        fib        = self.fibonacci_levels(closes)
-        support, resistance = self.support_resistance(closes)
-        vwap_val   = self.vwap(highs, lows, closes, volumes)
-        diverg     = self.divergence(closes, rsi_vals) if rsi_vals else "NONE"
-        vol_ok     = self.volume_above_average(volumes)
-
-        current_rsi   = rsi_vals[-1] if rsi_vals else 50.0
-        current_price = closes[-1]
-        rsi_z         = self.rsi_zone(current_rsi, trend_val)
-        fib_level     = self.price_at_fibonacci(current_price, fib)
-
+        if not closes:
+            return {"valid": False}
+        rsi_vals = self.rsi(closes)
+        macd_d   = self.macd(closes)
+        trend_v  = self.trend(closes)
+        regime   = self.market_regime(closes, volumes)
+        fib      = self.fibonacci_levels(closes)
+        sup, res = self.support_resistance(closes)
+        vwap_v   = self.vwap(highs, lows, closes, volumes)
+        diverg   = self.divergence(closes, rsi_vals) if rsi_vals else "NONE"
+        vol_ok   = self.volume_above_average(volumes)
+        cur_rsi  = rsi_vals[-1] if rsi_vals else 50.0
+        price    = closes[-1]
         return {
-            "valid":       True,
-            "price":       current_price,
-            "trend":       trend_val,
-            "regime":      regime,
-            "rsi":         current_rsi,
-            "rsi_zone":    rsi_z,
-            "macd":        macd_data,
-            "divergence":  diverg,
-            "support":     support,
-            "resistance":  resistance,
-            "vwap":        vwap_val,
-            "above_vwap":  current_price > vwap_val,
-            "fib_levels":  fib,
-            "fib_level":   fib_level,
-            "volume_ok":   vol_ok,
-            "dist_support": round((current_price - support) / support, 4) if support > 0 else 0,
+            "valid": True, "price": price, "trend": trend_v, "regime": regime,
+            "rsi": cur_rsi, "rsi_zone": self.rsi_zone(cur_rsi, trend_v),
+            "macd": macd_d, "divergence": diverg,
+            "support": sup, "resistance": res,
+            "vwap": vwap_v, "above_vwap": price > vwap_v,
+            "fib_levels": fib, "fib_level": self.price_at_fibonacci(price, fib),
+            "volume_ok": vol_ok,
+            "dist_support": round((price - sup) / sup, 4) if sup > 0 else 0,
         }
 
 
@@ -533,86 +439,61 @@ class TechnicalAnalysis:
 # ================================================================
 
 class MacroContext:
-    """Evalúa el estado macro del mercado — corre una vez por ciclo"""
 
     def __init__(self):
-        self.fetcher = DataFetcher()
-        self.cache   = {}
+        self.fetcher     = DataFetcher()
+        self.cache       = {}
         self.last_update = None
 
-    def update(self) -> dict:
+    def update(self, crypto_symbols: List[str] = None) -> dict:
+        if crypto_symbols is None:
+            crypto_symbols = CRYPTO_SYMBOLS_DEFAULT
         logging.info("[MACRO] Actualizando contexto macro...")
         ctx = {}
-
-        # Fear & Greed (rápido, sin rate limit)
         ctx["fear_greed"] = self.fetcher.get_fear_greed()
 
-        # Funding rates crypto (Binance, sin rate limit)
+        # Funding rates de los crypto del universo dinámico
         ctx["funding_rates"] = {}
-        for sym in CRYPTO_SYMBOLS:
+        for sym in crypto_symbols[:6]:  # máx 6 para no exceder rate limit
             ctx["funding_rates"][sym] = self.fetcher.get_funding_rate(sym)
 
-        # Open Interest (Binance)
         ctx["open_interest"] = {}
-        for sym in CRYPTO_SYMBOLS:
+        for sym in crypto_symbols[:4]:
             oi = self.fetcher.get_open_interest(sym)
             ctx["open_interest"][sym] = float(oi.get("openInterest", 0))
 
-        # SPY trend (AlphaVantage — lento)
         ctx["spy_trend"] = self.fetcher.get_spy_trend()
-
-        # VIX (AlphaVantage — lento)
-        ctx["vix"] = self.fetcher.get_vix()
-
-        # Clasificación macro general
-        ctx["macro_regime"] = self._classify_macro(ctx)
+        ctx["vix"]       = self.fetcher.get_vix()
+        ctx["macro_regime"]        = self._classify_macro(ctx)
         ctx["position_multiplier"] = self._position_multiplier(ctx)
-
-        self.cache = ctx
+        self.cache       = ctx
         self.last_update = datetime.now()
-        logging.info(f"[MACRO] F&G:{ctx['fear_greed']} VIX:{ctx['vix']:.1f} SPY:{ctx['spy_trend']} Regime:{ctx['macro_regime']}")
+        logging.info(
+            f"[MACRO] F&G:{ctx['fear_greed']} VIX:{ctx['vix']:.1f} "
+            f"SPY:{ctx['spy_trend']} Regime:{ctx['macro_regime']}"
+        )
         return ctx
 
     def _classify_macro(self, ctx: dict) -> str:
-        """
-        RISK_ON  : mercado con apetito de riesgo alto → operar normal
-        RISK_OFF : miedo elevado → reducir exposición
-        DANGER   : pánico extremo → no abrir nuevas posiciones
-        """
-        vix         = ctx.get("vix", 20)
-        fear_greed  = ctx.get("fear_greed", 50)
-        spy         = ctx.get("spy_trend", "NEUTRAL")
-
-        if vix > VIX_VERY_HIGH or fear_greed < 10:
+        vix, fg, spy = ctx.get("vix", 20), ctx.get("fear_greed", 50), ctx.get("spy_trend", "NEUTRAL")
+        if vix > VIX_VERY_HIGH or fg < 10:
             return "DANGER"
-        if vix > VIX_HIGH or fear_greed < FEAR_GREED_PANICO or spy == "RISK_OFF":
+        if vix > VIX_HIGH or fg < FEAR_GREED_PANICO or spy == "RISK_OFF":
             return "RISK_OFF"
         return "RISK_ON"
 
     def _position_multiplier(self, ctx: dict) -> float:
-        """Ajusta el tamaño de posición según el régimen macro"""
-        regime     = ctx.get("macro_regime", "RISK_ON")
-        fear_greed = ctx.get("fear_greed", 50)
-        if regime == "DANGER":
-            return 0.0    # no abrir posiciones
-        if regime == "RISK_OFF":
-            return 0.5    # mitad del tamaño normal
-        if fear_greed > FEAR_GREED_EUFORIA:
-            return 0.5    # mercado en euforia → precaución
-        if fear_greed < FEAR_GREED_PANICO:
-            return 1.5    # pánico = oportunidad → más convicción
+        regime, fg = ctx.get("macro_regime", "RISK_ON"), ctx.get("fear_greed", 50)
+        if regime == "DANGER":   return 0.0
+        if regime == "RISK_OFF": return 0.5
+        if fg > FEAR_GREED_EUFORIA: return 0.5
+        if fg < FEAR_GREED_PANICO:  return 1.5
         return 1.0
 
     def funding_signal(self, symbol: str) -> str:
-        """
-        Funding rate alto positivo → todos están long → riesgo de liquidación masiva
-        Funding rate muy negativo → todos están short → posible short squeeze
-        """
         fr = self.cache.get("funding_rates", {}).get(symbol, 0)
-        if fr > FUNDING_HIGH:
-            return "OVERCROWDED_LONG"    # precaución para BUY
-        if fr < FUNDING_LOW:
-            return "OVERCROWDED_SHORT"   # oportunidad para BUY (short squeeze)
+        if fr > FUNDING_HIGH:  return "OVERCROWDED_LONG"
+        if fr < FUNDING_LOW:   return "OVERCROWDED_SHORT"
         return "NEUTRAL"
 
 
@@ -625,120 +506,66 @@ class SignalScorer:
     def __init__(self):
         self.ta = TechnicalAnalysis()
 
-    def score_buy(self, daily: dict, h4: dict, macro: dict, funding_signal: str) -> Tuple[int, dict]:
-        """
-        8 condiciones de compra:
-        1. Tendencia diaria favorable (BULLISH o LATERAL)
-        2. RSI en zona de compra según tendencia
-        3. MACD alcista o cruzando al alza
-        4. Precio en soporte o nivel Fibonacci clave
-        5. Volumen confirma
-        6. Divergencia alcista
-        7. Timeframe 4h alineado (tendencia 4h no bajista)
-        8. Contexto macro favorable (no DANGER, funding no sobrecargado)
-        """
+    def score_buy(self, daily: dict, h4: dict, macro: dict, funding_sig: str) -> Tuple[int, dict]:
         checks = {}
-
-        # 1. Tendencia diaria
-        checks["tendencia_alcista"] = daily.get("trend") in ("BULLISH", "LATERAL")
-
-        # 2. RSI zona compra
-        checks["rsi_zona_compra"] = daily.get("rsi_zone") == "BUY_ZONE"
-
-        # 3. MACD alcista
+        checks["tendencia_alcista"]      = daily.get("trend") in ("BULLISH", "LATERAL")
+        checks["rsi_zona_compra"]        = daily.get("rsi_zone") == "BUY_ZONE"
         macd = daily.get("macd", {})
-        checks["macd_alcista"] = macd.get("bullish", False) or macd.get("cross_up", False)
-
-        # 4. Soporte o Fibonacci
-        at_support = daily.get("dist_support", 1) <= 0.02
-        at_fib     = daily.get("fib_level") in (0.382, 0.500, 0.618)
-        checks["en_soporte_o_fibonacci"] = at_support or at_fib
-
-        # 5. Volumen confirma
-        checks["volumen_confirma"] = daily.get("volume_ok", False)
-
-        # 6. Divergencia alcista
-        checks["divergencia_alcista"] = daily.get("divergence") == "BULLISH"
-
-        # 7. 4h alineado
-        checks["4h_alineado"] = h4.get("trend") != "BEARISH" if h4.get("valid") else True
-
-        # 8. Macro favorable
-        macro_ok     = macro.get("macro_regime") != "DANGER"
-        funding_ok   = funding_signal != "OVERCROWDED_LONG"
-        regime_ok    = daily.get("regime") in ("ACUMULACION", "EXPANSION", "INDEFINIDO")
-        checks["macro_favorable"] = macro_ok and funding_ok and regime_ok
-
+        checks["macd_alcista"]           = macd.get("bullish", False) or macd.get("cross_up", False)
+        at_sup = daily.get("dist_support", 1) <= 0.02
+        at_fib = daily.get("fib_level") in (0.382, 0.500, 0.618)
+        checks["en_soporte_o_fibonacci"] = at_sup or at_fib
+        checks["volumen_confirma"]       = daily.get("volume_ok", False)
+        checks["divergencia_alcista"]    = daily.get("divergence") == "BULLISH"
+        checks["4h_alineado"]            = h4.get("trend") != "BEARISH" if h4.get("valid") else True
+        macro_ok   = macro.get("macro_regime") != "DANGER"
+        funding_ok = funding_sig != "OVERCROWDED_LONG"
+        regime_ok  = daily.get("regime") in ("ACUMULACION", "EXPANSION", "INDEFINIDO")
+        checks["macro_favorable"]        = macro_ok and funding_ok and regime_ok
         score = sum(1 for v in checks.values() if v)
         return score, checks
 
-    def score_sell(self, daily: dict, h4: dict, macro: dict, funding_signal: str) -> Tuple[int, dict]:
-        """
-        8 condiciones de venta:
-        1. Tendencia diaria desfavorable (BEARISH o LATERAL)
-        2. RSI en zona de venta según tendencia
-        3. MACD bajista o cruzando a la baja
-        4. Precio en resistencia o Fibonacci de distribución
-        5. Volumen confirma
-        6. Divergencia bajista
-        7. Timeframe 4h alineado (tendencia 4h no alcista)
-        8. Contexto macro desfavorable
-        """
+    def score_sell(self, daily: dict, h4: dict, macro: dict, funding_sig: str) -> Tuple[int, dict]:
         checks = {}
-
-        checks["tendencia_bajista"]        = daily.get("trend") in ("BEARISH", "LATERAL")
-        checks["rsi_zona_venta"]           = daily.get("rsi_zone") == "SELL_ZONE"
+        checks["tendencia_bajista"]   = daily.get("trend") in ("BEARISH", "LATERAL")
+        checks["rsi_zona_venta"]      = daily.get("rsi_zone") == "SELL_ZONE"
         macd = daily.get("macd", {})
-        checks["macd_bajista"]             = not macd.get("bullish", True) or macd.get("cross_down", False)
-        at_resistance = (daily.get("resistance", 0) > 0 and
-                         abs(daily.get("price", 0) - daily.get("resistance", 0)) / daily.get("resistance", 1) <= 0.02)
-        checks["en_resistencia"]           = at_resistance
-        checks["volumen_confirma"]         = daily.get("volume_ok", False)
-        checks["divergencia_bajista"]      = daily.get("divergence") == "BEARISH"
-        checks["4h_alineado"]              = h4.get("trend") != "BULLISH" if h4.get("valid") else True
-        checks["macro_desfavorable"]       = (macro.get("macro_regime") in ("RISK_OFF", "DANGER") or
-                                              daily.get("regime") in ("DISTRIBUCION", "CONTRACCION"))
-
+        checks["macd_bajista"]        = not macd.get("bullish", True) or macd.get("cross_down", False)
+        res = daily.get("resistance", 0)
+        at_res = res > 0 and abs(daily.get("price", 0) - res) / res <= 0.02
+        checks["en_resistencia"]      = at_res
+        checks["volumen_confirma"]    = daily.get("volume_ok", False)
+        checks["divergencia_bajista"] = daily.get("divergence") == "BEARISH"
+        checks["4h_alineado"]         = h4.get("trend") != "BULLISH" if h4.get("valid") else True
+        checks["macro_desfavorable"]  = (
+            macro.get("macro_regime") in ("RISK_OFF", "DANGER") or
+            daily.get("regime") in ("DISTRIBUCION", "CONTRACCION")
+        )
         score = sum(1 for v in checks.values() if v)
         return score, checks
 
 
 # ================================================================
-# KELLY CRITERION — tamaño dinámico de posición
+# KELLY CRITERION
 # ================================================================
 
 class KellyCriterion:
 
     def calculate(self, trades: List[dict], base_pct: float) -> float:
-        """
-        Calcula el tamaño óptimo de posición basado en el historial.
-        Usa Half Kelly para reducir volatilidad.
-        Requiere mínimo 20 trades para ser estadísticamente válido.
-        """
         sells = [t for t in trades if t.get("action") == "SELL" and "pnl" in t]
-
         if len(sells) < 20:
-            return base_pct  # sin historial suficiente → tamaño base
-
-        wins    = [t for t in sells if t["pnl"] > 0]
-        losses  = [t for t in sells if t["pnl"] <= 0]
-        win_rate = len(wins) / len(sells)
-
+            return base_pct
+        wins   = [t for t in sells if t["pnl"] > 0]
+        losses = [t for t in sells if t["pnl"] <= 0]
         if not wins or not losses:
             return base_pct
-
+        win_rate = len(wins) / len(sells)
         avg_win  = sum(t["pnl"] for t in wins) / len(wins)
         avg_loss = abs(sum(t["pnl"] for t in losses) / len(losses))
-
         if avg_loss == 0:
             return base_pct
-
-        # Kelly = W/L - (1-W)/G
         kelly = (win_rate / avg_loss) - ((1 - win_rate) / avg_win)
-        half_kelly = kelly * 0.5  # Half Kelly — más conservador
-
-        # Clampear entre 2% y MAX_POSITION_PCT
-        return max(0.02, min(half_kelly, MAX_POSITION_PCT))
+        return max(0.02, min(kelly * 0.5, MAX_POSITION_PCT))
 
 
 # ================================================================
@@ -748,8 +575,8 @@ class KellyCriterion:
 class PsychologyFilters:
 
     def check_all(self, symbol: str, direction: str, portfolio: "Portfolio", macro: dict) -> Tuple[bool, List[str]]:
-        failures = []
-        fear_greed = macro.get("fear_greed", 50)
+        failures     = []
+        fear_greed   = macro.get("fear_greed", 50)
         macro_regime = macro.get("macro_regime", "RISK_ON")
 
         if portfolio.status != "RUNNING":
@@ -761,8 +588,7 @@ class PsychologyFilters:
             failures.append("3_perdidas_consecutivas")
             portfolio.pause("3 pérdidas consecutivas")
         if direction == "BUY" and symbol in portfolio.positions:
-            pos = portfolio.positions[symbol]
-            if pos["current_price"] < pos["avg_price"]:
+            if portfolio.positions[symbol]["current_price"] < portfolio.positions[symbol]["avg_price"]:
                 failures.append("averaging_down_bloqueado")
         if direction == "BUY" and portfolio.entry_distances.get(symbol, 0) > MAX_ENTRY_FROM_SUPPORT:
             failures.append("fomo_lejos_del_soporte")
@@ -786,12 +612,12 @@ class PsychologyFilters:
 class Portfolio:
 
     def __init__(self):
-        self.capital          = INITIAL_CAPITAL
+        self.capital               = INITIAL_CAPITAL
         self.positions: Dict[str, dict] = {}
         self.trades: List[dict]         = []
         self.equity_curve               = [INITIAL_CAPITAL]
-        self.status           = "RUNNING"
-        self.pause_reason     = ""
+        self.status                = "RUNNING"
+        self.pause_reason          = ""
         self.consecutive_losses    = 0
         self.daily_pnl_pct         = 0.0
         self.monthly_pnl_pct       = 0.0
@@ -810,33 +636,30 @@ class Portfolio:
         self.consecutive_losses = 0
 
     def reset_daily(self):
-        pos_value = sum(p["qty"] * p["current_price"] for p in self.positions.values())
-        self.start_of_day_equity = self.capital + pos_value
+        pos_val = sum(p["qty"] * p["current_price"] for p in self.positions.values())
+        self.start_of_day_equity = self.capital + pos_val
         self.daily_pnl_pct = 0.0
         if self.pause_reason == "Límite pérdida diaria 6%":
             self.resume()
 
     def open_position(self, symbol: str, price: float, signal_type: str, size_pct: float) -> bool:
         allocation = INITIAL_CAPITAL * size_pct
-        if self.capital < allocation:
+        if self.capital < allocation or price <= 0:
             return False
         qty = allocation / price
         if symbol in self.positions:
             pos = self.positions[symbol]
             if pos["current_price"] < pos["avg_price"]:
                 return False
-            total_qty       = pos["qty"] + qty
+            total_qty        = pos["qty"] + qty
             pos["avg_price"] = (pos["avg_price"] * pos["qty"] + price * qty) / total_qty
             pos["qty"]       = total_qty
         else:
             self.positions[symbol] = {
-                "qty":             qty,
-                "avg_price":       price,
-                "current_price":   price,
+                "qty": qty, "avg_price": price, "current_price": price,
                 "stop_loss":       round(price * (1 - STOP_LOSS_PCT), 6),
                 "take_profit":     round(price * (1 + TAKE_PROFIT_PCT), 6),
-                "trailing_stop":   None,
-                "trailing_active": False,
+                "trailing_stop":   None, "trailing_active": False,
                 "max_price_seen":  price,
                 "opened_at":       datetime.now().isoformat(),
                 "signal_type":     signal_type,
@@ -845,8 +668,9 @@ class Portfolio:
         self.trades.append({
             "action": "BUY", "symbol": symbol, "price": price,
             "qty": qty, "allocation": round(allocation, 2),
-            "signal_type": signal_type, "timestamp": datetime.now().isoformat()
+            "signal_type": signal_type, "timestamp": datetime.now().isoformat(),
         })
+        logging.info(f"[OPEN] {signal_type} {symbol} @ ${price:,.4f} | alloc: ${allocation:,.0f}")
         return True
 
     def close_position(self, symbol: str, price: float, reason: str) -> Optional[float]:
@@ -860,11 +684,12 @@ class Portfolio:
         self.trades.append({
             "action": "SELL", "symbol": symbol, "price": price,
             "qty": pos["qty"], "proceeds": round(proceeds, 2),
-            "pnl": round(pnl, 2), "pnl_pct": round(pnl / cost * 100, 2),
-            "reason": reason, "timestamp": datetime.now().isoformat()
+            "pnl": round(pnl, 2), "pnl_pct": round(pnl / max(cost, 0.01) * 100, 2),
+            "reason": reason, "timestamp": datetime.now().isoformat(),
         })
         self.consecutive_losses = self.consecutive_losses + 1 if pnl < 0 else 0
         del self.positions[symbol]
+        logging.info(f"[CLOSE] {reason} {symbol} @ ${price:,.4f} | P&L: ${pnl:+,.2f}")
         return pnl
 
     def update_prices(self, prices: Dict[str, float]) -> List[dict]:
@@ -891,10 +716,9 @@ class Portfolio:
             elif price >= pos["take_profit"]:
                 stops.append({"symbol": symbol, "price": price, "reason": "TAKE_PROFIT"})
         for event in stops:
-            pnl = self.close_position(event["symbol"], event["price"], event["reason"])
-            event["pnl"] = pnl
-        pos_value = sum(p["qty"] * p["current_price"] for p in self.positions.values())
-        total_eq  = self.capital + pos_value
+            event["pnl"] = self.close_position(event["symbol"], event["price"], event["reason"])
+        pos_val  = sum(p["qty"] * p["current_price"] for p in self.positions.values())
+        total_eq = self.capital + pos_val
         self.equity_curve.append(round(total_eq, 2))
         if self.start_of_day_equity > 0:
             self.daily_pnl_pct = (total_eq - self.start_of_day_equity) / self.start_of_day_equity
@@ -905,26 +729,26 @@ class Portfolio:
         return stops
 
     def get_summary(self) -> dict:
-        pos_value = sum(p["qty"] * p["current_price"] for p in self.positions.values())
-        total_eq  = self.capital + pos_value
-        pnl       = total_eq - INITIAL_CAPITAL
-        sells     = [t for t in self.trades if t["action"] == "SELL"]
-        wins      = [t for t in sells if t.get("pnl", 0) > 0]
+        pos_val  = sum(p["qty"] * p["current_price"] for p in self.positions.values())
+        total_eq = self.capital + pos_val
+        pnl      = total_eq - INITIAL_CAPITAL
+        sells    = [t for t in self.trades if t["action"] == "SELL"]
+        wins     = [t for t in sells if t.get("pnl", 0) > 0]
         return {
-            "capital_libre":        round(self.capital, 2),
-            "posiciones_valor":     round(pos_value, 2),
-            "equity_total":         round(total_eq, 2),
-            "pnl_neto":             round(pnl, 2),
-            "pnl_pct":              round(pnl / INITIAL_CAPITAL * 100, 2),
-            "posiciones_abiertas":  len(self.positions),
-            "trades_totales":       len(self.trades),
-            "win_rate":             round(len(wins) / len(sells) * 100, 1) if sells else 0,
+            "capital_libre":         round(self.capital, 2),
+            "posiciones_valor":      round(pos_val, 2),
+            "equity_total":          round(total_eq, 2),
+            "pnl_neto":              round(pnl, 2),
+            "pnl_pct":               round(pnl / INITIAL_CAPITAL * 100, 2),
+            "posiciones_abiertas":   len(self.positions),
+            "trades_totales":        len(self.trades),
+            "win_rate":              round(len(wins) / len(sells) * 100, 1) if sells else 0,
             "perdidas_consecutivas": self.consecutive_losses,
-            "daily_pnl_pct":        round(self.daily_pnl_pct * 100, 2),
-            "monthly_pnl_pct":      round(self.monthly_pnl_pct * 100, 2),
-            "status":               self.status,
-            "pause_reason":         self.pause_reason,
-            "equity_curve":         self.equity_curve[-60:],
+            "daily_pnl_pct":         round(self.daily_pnl_pct * 100, 2),
+            "monthly_pnl_pct":       round(self.monthly_pnl_pct * 100, 2),
+            "status":                self.status,
+            "pause_reason":          self.pause_reason,
+            "equity_curve":          self.equity_curve[-60:],
             "posiciones_detalle": {
                 sym: {
                     "qty":             round(p["qty"], 6),
@@ -948,7 +772,7 @@ class Portfolio:
 class Notifier:
     def send(self, message: str):
         if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
-            logging.info(f"[TELEGRAM MOCK] {message}")
+            logging.info(f"[TELEGRAM MOCK] {message[:80]}")
             return
         try:
             requests.post(
@@ -961,100 +785,89 @@ class Notifier:
 
 
 # ================================================================
-# BOT PRINCIPAL v2
+# BOT PRINCIPAL v3
 # ================================================================
 
 class TradingBot:
 
     def __init__(self):
-        self.fetcher   = DataFetcher()
-        self.ta        = TechnicalAnalysis()
-        self.scorer    = SignalScorer()
-        self.psych     = PsychologyFilters()
-        self.kelly     = KellyCriterion()
-        self.macro_ctx = MacroContext()
-        self.portfolio = Portfolio()
-        self.notifier  = Notifier()
-        self.running   = False
-        self.last_prices: Dict[str, float] = {}
-        self.last_signals: List[dict]      = []
-        self.cycle_count = 0
-        self.macro: dict = {}
+        self.fetcher        = DataFetcher()
+        self.ta             = TechnicalAnalysis()
+        self.scorer         = SignalScorer()
+        self.psych          = PsychologyFilters()
+        self.kelly          = KellyCriterion()
+        self.macro_ctx      = MacroContext()
+        self.portfolio      = Portfolio()
+        self.notifier       = Notifier()
+        self.running        = False
+        self.last_prices:   Dict[str, float] = {}
+        self.last_signals:  List[dict]       = []
+        self.last_universe: dict             = {}
+        self.cycle_count    = 0
+        self.macro: dict    = {}
+
+    # ---- Análisis de un activo ---------------------------------
 
     def analyze(self, symbol: str, asset_type: str) -> Optional[dict]:
-        """Análisis completo de un activo en dos timeframes"""
+        try:
+            if asset_type == "crypto":
+                daily_raw = self.fetcher.get_crypto_ohlcv_daily(symbol)
+                h4_raw    = self.fetcher.get_crypto_ohlcv_4h(symbol)
+            elif asset_type == "stock":
+                daily_raw = self.fetcher.get_stock_ohlcv(symbol)
+                h4_raw    = []
+            elif asset_type == "forex":
+                pair      = symbol.split("/")
+                daily_raw = self.fetcher.get_forex_ohlcv(pair[0], pair[1])
+                h4_raw    = []
+            else:
+                return None
 
-        # Obtener OHLCV diario
-        if asset_type == "crypto":
-            daily_raw = self.fetcher.get_crypto_ohlcv_daily(symbol)
-            h4_raw    = self.fetcher.get_crypto_ohlcv_4h(symbol)
-        elif asset_type == "stock":
-            daily_raw = self.fetcher.get_stock_ohlcv(symbol)
-            h4_raw    = []
-        elif asset_type == "forex":
-            pair      = symbol.split("/")
-            daily_raw = self.fetcher.get_forex_ohlcv(pair[0], pair[1])
-            h4_raw    = []
-        else:
+            if len(daily_raw) < 50:
+                logging.info(f"[SKIP] {symbol} — datos insuficientes ({len(daily_raw)} velas)")
+                return None
+
+            daily = self.ta.full_analysis(daily_raw, symbol)
+            h4    = self.ta.full_analysis(h4_raw, symbol) if len(h4_raw) >= 30 else {"valid": False}
+
+            if not daily.get("valid"):
+                return None
+
+            self.last_prices[symbol] = daily["price"]
+            self.portfolio.entry_distances[symbol] = daily.get("dist_support", 1)
+
+            funding_sig = self.macro_ctx.funding_signal(symbol) if asset_type == "crypto" else "NEUTRAL"
+
+            buy_score,  buy_checks  = self.scorer.score_buy(daily, h4, self.macro, funding_sig)
+            sell_score, sell_checks = self.scorer.score_sell(daily, h4, self.macro, funding_sig)
+
+            if buy_score >= sell_score and buy_score >= MIN_SIGNAL_SCORE:
+                direction, score, checks = "BUY", buy_score, buy_checks
+            elif sell_score > buy_score and sell_score >= MIN_SIGNAL_SCORE:
+                direction, score, checks = "SELL", sell_score, sell_checks
+            else:
+                return None
+
+            signal_type = "STRONG_BUY" if direction == "BUY" and score >= SCORE_STRONG_BUY else direction
+
+            return {
+                "symbol": symbol, "asset_type": asset_type,
+                "direction": direction, "signal_type": signal_type,
+                "price": daily["price"], "score": score, "max_score": 8,
+                "checks": checks, "daily": daily,
+                "h4_valid": h4.get("valid", False),
+                "funding": funding_sig, "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logging.error(f"[ANALYZE ERROR] {symbol}: {e}")
             return None
 
-        if len(daily_raw) < 50:
-            return None
-
-        daily = self.ta.full_analysis(daily_raw, symbol)
-        h4    = self.ta.full_analysis(h4_raw, symbol) if len(h4_raw) >= 30 else {"valid": False}
-
-        if not daily["valid"]:
-            return None
-
-        self.last_prices[symbol] = daily["price"]
-        self.portfolio.entry_distances[symbol] = daily.get("dist_support", 1)
-
-        # Funding signal para crypto
-        funding_sig = self.macro_ctx.funding_signal(symbol) if asset_type == "crypto" else "NEUTRAL"
-
-        # Determinar dirección y puntuar
-        buy_score,  buy_checks  = self.scorer.score_buy(daily, h4, self.macro, funding_sig)
-        sell_score, sell_checks = self.scorer.score_sell(daily, h4, self.macro, funding_sig)
-
-        # Elegir la dirección con mayor score
-        if buy_score >= sell_score and buy_score >= MIN_SIGNAL_SCORE:
-            direction = "BUY"
-            score     = buy_score
-            checks    = buy_checks
-        elif sell_score > buy_score and sell_score >= MIN_SIGNAL_SCORE:
-            direction = "SELL"
-            score     = sell_score
-            checks    = sell_checks
-        else:
-            return None
-
-        # Determinar tipo de señal
-        signal_type = "STRONG_BUY" if (direction == "BUY" and score >= SCORE_STRONG_BUY) else direction
-
-        return {
-            "symbol":       symbol,
-            "asset_type":   asset_type,
-            "direction":    direction,
-            "signal_type":  signal_type,
-            "price":        daily["price"],
-            "score":        score,
-            "max_score":    8,
-            "checks":       checks,
-            "daily":        daily,
-            "h4_valid":     h4.get("valid", False),
-            "funding":      funding_sig,
-            "timestamp":    datetime.now().isoformat(),
-        }
+    # ---- Ejecutar señal ----------------------------------------
 
     def execute(self, signal: dict):
-        symbol      = signal["symbol"]
-        direction   = signal["direction"]
-        price       = signal["price"]
-        signal_type = signal["signal_type"]
-        score       = signal["score"]
-        daily       = signal["daily"]
-
+        symbol, direction = signal["symbol"], signal["direction"]
+        price, signal_type = signal["price"], signal["signal_type"]
+        score, daily = signal["score"], signal["daily"]
         multiplier = self.macro.get("position_multiplier", 1.0)
 
         if direction == "BUY":
@@ -1067,42 +880,72 @@ class TradingBot:
                 self.notifier.send(
                     f"🟢 *{signal_type}* `{symbol}`\n"
                     f"Precio: `${price:,.4f}` · Score: *{score}/8*\n"
-                    f"Tendencia: {daily['trend']} · RSI: {daily['rsi']:.1f} · MACD: {'✅' if daily.get('macd', {}).get('bullish') else '❌'}\n"
+                    f"Tendencia: {daily['trend']} · RSI: {daily['rsi']:.1f} · "
+                    f"MACD: {'✅' if daily.get('macd', {}).get('bullish') else '❌'}\n"
                     f"Régimen: {daily['regime']} · VWAP: {'↑' if daily['above_vwap'] else '↓'}\n"
-                    f"Fibonacci: {daily['fib_level'] or 'N/A'} · Funding: {signal['funding']}\n"
-                    f"SL: `${pos.get('stop_loss',0):,.4f}` · TP: `${pos.get('take_profit',0):,.4f}`\n"
-                    f"Macro: {self.macro.get('macro_regime')} · F&G: {self.macro.get('fear_greed')} · VIX: {self.macro.get('vix',0):.1f}"
+                    f"Fib: {daily['fib_level'] or 'N/A'} · Funding: {signal['funding']}\n"
+                    f"SL: `${pos.get('stop_loss', 0):,.4f}` · TP: `${pos.get('take_profit', 0):,.4f}`\n"
+                    f"Macro: {self.macro.get('macro_regime')} · "
+                    f"F&G: {self.macro.get('fear_greed')} · VIX: {self.macro.get('vix', 0):.1f}"
                 )
 
-        elif direction == "SELL":
-            if symbol in self.portfolio.positions:
-                pnl = self.portfolio.close_position(symbol, price, "SEÑAL_VENTA")
-                if pnl is not None:
-                    emoji = "🟢" if pnl > 0 else "🔴"
-                    self.notifier.send(
-                        f"{emoji} *SELL* `{symbol}` @ `${price:,.4f}`\n"
-                        f"Score: {score}/8 · P&L: `${pnl:+,.2f}`\n"
-                        f"RSI: {daily['rsi']:.1f} · Divergencia: {daily['divergence']}"
-                    )
+        elif direction == "SELL" and symbol in self.portfolio.positions:
+            pnl = self.portfolio.close_position(symbol, price, "SEÑAL_VENTA")
+            if pnl is not None:
+                emoji = "🟢" if pnl > 0 else "🔴"
+                self.notifier.send(
+                    f"{emoji} *SELL* `{symbol}` @ `${price:,.4f}`\n"
+                    f"Score: {score}/8 · P&L: `${pnl:+,.2f}`\n"
+                    f"RSI: {daily['rsi']:.1f} · Div: {daily['divergence']}"
+                )
+
+    # ---- Ciclo principal con universo dinámico -----------------
 
     def run_cycle(self) -> dict:
         self.cycle_count += 1
         logging.info(f"[CICLO {self.cycle_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # Actualizar contexto macro
-        self.macro = self.macro_ctx.update()
+        # 1. Construir universo dinámico
+        if DYNAMIC_UNIVERSE:
+            try:
+                universe_data = universe_builder.build()
+                symbols       = universe_builder.get_symbols_by_type(universe_data["universe"])
+                self.last_universe = universe_data
+                crypto_syms   = symbols["crypto"]
+                stock_syms    = symbols["stocks"]
+                forex_pairs   = symbols["forex"]
+                self.notifier.send(
+                    f"🔍 *Universo del día*\n"
+                    f"Total: *{universe_data['total']} activos*\n"
+                    f"Crypto: {universe_data['breakdown']['crypto']} · "
+                    f"USA+LATAM: {universe_data['breakdown']['usa'] + universe_data['breakdown']['latam']} · "
+                    f"Forex: {universe_data['breakdown']['forex']}\n"
+                    f"Sectores líderes: {', '.join(universe_data.get('leading_sectors', []))}"
+                )
+            except Exception as e:
+                logging.error(f"[UNIVERSE ERROR] {e} — usando universo fijo")
+                crypto_syms = CRYPTO_SYMBOLS_DEFAULT
+                stock_syms  = STOCK_SYMBOLS_DEFAULT
+                forex_pairs = FOREX_PAIRS_DEFAULT
+        else:
+            crypto_syms = CRYPTO_SYMBOLS_DEFAULT
+            stock_syms  = STOCK_SYMBOLS_DEFAULT
+            forex_pairs = FOREX_PAIRS_DEFAULT
+
+        # 2. Actualizar contexto macro con los crypto del universo
+        self.macro = self.macro_ctx.update(crypto_symbols=crypto_syms)
 
         if self.macro.get("macro_regime") == "DANGER":
             self.notifier.send(
                 f"⚠️ *MACRO DANGER*\n"
-                f"VIX: {self.macro.get('vix',0):.1f} · F&G: {self.macro.get('fear_greed')}\n"
+                f"VIX: {self.macro.get('vix', 0):.1f} · F&G: {self.macro.get('fear_greed')}\n"
                 f"No se abren nuevas posiciones."
             )
 
         signals_ok, signals_blocked = [], []
 
-        # Analizar todos los activos
-        for sym in CRYPTO_SYMBOLS:
+        # 3. Analizar crypto
+        for sym in crypto_syms:
             signal = self.analyze(sym, "crypto")
             if signal:
                 ok, failures = self.psych.check_all(sym, signal["direction"], self.portfolio, self.macro)
@@ -1114,7 +957,8 @@ class TradingBot:
                 else:
                     signals_blocked.append({**signal, "failures": failures})
 
-        for sym in STOCK_SYMBOLS:
+        # 4. Analizar stocks (USA + LATAM)
+        for sym in stock_syms:
             signal = self.analyze(sym, "stock")
             if signal:
                 ok, failures = self.psych.check_all(sym, signal["direction"], self.portfolio, self.macro)
@@ -1126,7 +970,8 @@ class TradingBot:
                 else:
                     signals_blocked.append({**signal, "failures": failures})
 
-        for from_sym, to_sym in FOREX_PAIRS:
+        # 5. Analizar forex
+        for from_sym, to_sym in forex_pairs:
             sym    = f"{from_sym}/{to_sym}"
             signal = self.analyze(sym, "forex")
             if signal:
@@ -1139,17 +984,19 @@ class TradingBot:
                 else:
                     signals_blocked.append({**signal, "failures": failures})
 
-        # Chequear stops
+        # 6. Chequear stops automáticos
         stops = self.portfolio.update_prices(self.last_prices)
         for event in stops:
             emoji = {"STOP_LOSS": "🔴", "TRAILING_STOP": "🟡", "TAKE_PROFIT": "🟢"}.get(event["reason"], "⚪")
             self.notifier.send(
                 f"{emoji} *{event['reason']}*\n"
-                f"`{event['symbol']}` @ `${event['price']:,.4f}` · P&L: `${event.get('pnl', 0):+,.2f}`"
+                f"`{event['symbol']}` @ `${event['price']:,.4f}` · "
+                f"P&L: `${event.get('pnl', 0):+,.2f}`"
             )
 
         self.last_signals = signals_ok + signals_blocked
         summary = self.portfolio.get_summary()
+
         logging.info(
             f"[RESUMEN] Equity: ${summary['equity_total']:,.2f} | "
             f"P&L: {summary['pnl_pct']:+.2f}% | "
@@ -1160,33 +1007,39 @@ class TradingBot:
         return {
             "cycle":           self.cycle_count,
             "macro":           self.macro,
+            "universe_total":  len(crypto_syms) + len(stock_syms) + len(forex_pairs),
             "signals_ok":      len(signals_ok),
             "signals_blocked": len(signals_blocked),
             "stops":           len(stops),
             "summary":         summary,
         }
 
+    # ---- Loop asíncrono ----------------------------------------
+
     async def start(self, interval_minutes: int = 60):
         self.running = True
         self.notifier.send(
-            f"🚀 *BetScan Trading Bot v2.0 iniciado*\n"
+            f"🚀 *BetScan Trading Bot v3.0 iniciado*\n"
             f"Capital: `$50,000` · Ciclo: {interval_minutes}min\n"
-            f"Motor: RSI + MACD + Fibonacci + VWAP + Wyckoff\n"
-            f"Macro: VIX + DXY + SPY + Funding Rate\n"
+            f"Motor: RSI+MACD+Fibonacci+VWAP+Wyckoff\n"
+            f"Universo: dinámico — top 50 activos del día\n"
             f"Score mínimo: {MIN_SIGNAL_SCORE}/8"
         )
         while self.running:
             try:
                 self.run_cycle()
             except Exception as e:
-                logging.error(f"[ERROR] {e}")
+                logging.error(f"[ERROR CICLO] {e}")
                 self.notifier.send(f"⚠️ *Error en ciclo*\n`{str(e)}`")
             await asyncio.sleep(interval_minutes * 60)
 
     def stop(self):
         self.running = False
-        self.notifier.send("⏹ *BetScan Trading Bot v2.0 detenido*")
+        self.notifier.send("⏹ *BetScan Trading Bot v3.0 detenido*")
 
 
-# Instancia global
+# ================================================================
+# INSTANCIA GLOBAL
+# ================================================================
+
 bot = TradingBot()
