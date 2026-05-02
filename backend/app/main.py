@@ -40,7 +40,11 @@ import asyncio
 
 @app.on_event("startup")
 async def start_bot():
-    asyncio.create_task(bot.start(interval_minutes=60))
+    # Delay de 30 segundos para que Railway confirme el health check primero
+    async def delayed_start():
+        await asyncio.sleep(30)
+        await bot.start(interval_minutes=60)
+    asyncio.create_task(delayed_start())
 
 @app.get("/api/bot/status")
 async def bot_status():
