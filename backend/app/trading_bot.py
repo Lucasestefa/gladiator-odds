@@ -108,9 +108,20 @@ RSI_BUY_LATERAL  = 30
 RSI_SELL_LATERAL = 70
 
 # ---- Universo FIJO (fallback si el scraper falla) -------------
-CRYPTO_SYMBOLS_DEFAULT = ["BTC", "ETH", "SOL", "BNB", "AVAX", "MATIC"]
-STOCK_SYMBOLS_DEFAULT  = ["AAPL", "NVDA", "SPY", "TSLA", "MSFT", "AVGO", "MELI", "YPF"]
-FOREX_PAIRS_DEFAULT    = [("EUR", "USD"), ("GBP", "USD"), ("USD", "JPY")]
+CRYPTO_SYMBOLS_DEFAULT = ["BTC", "ETH", "SOL", "BNB", "AVAX", "MATIC", "LINK", "DOT"]
+STOCK_SYMBOLS_DEFAULT  = [
+    # Momentum fuerte mayo 2026
+    "FIX", "TXN", "ONTO", "ENVA",
+    # Largo plazo — moat fuerte
+    "ABNB", "SHOP", "META",
+    # LATAM
+    "MELI", "YPF",
+    # Core tech
+    "NVDA", "MSFT", "AAPL",
+    # ETFs índice
+    "SPY", "QQQ",
+]
+FOREX_PAIRS_DEFAULT    = [("EUR", "USD"), ("GBP", "USD"), ("USD", "JPY"), ("USD", "BRL")]
 
 # Mapeo Binance para funding rate
 BINANCE_MAP = {
