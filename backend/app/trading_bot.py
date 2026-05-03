@@ -53,6 +53,18 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
+# ---- Fee engine de Alpaca --------------------------------------
+try:
+    from app.alpaca_fees import AlpacaFeeEngine
+    _FEE_ENGINE_AVAILABLE = True
+except ImportError:
+    try:
+        from alpaca_fees import AlpacaFeeEngine
+        _FEE_ENGINE_AVAILABLE = True
+    except ImportError:
+        _FEE_ENGINE_AVAILABLE = False
+        logging.warning("[BOT] alpaca_fees no disponible — fees no se calcularán")
+
 # ---- Importar el scraper de universo dinámico ------------------
 try:
     from app.market_scraper import universe_builder
@@ -635,6 +647,19 @@ class Portfolio:
         self.start_of_day_equity   = INITIAL_CAPITAL
         self.start_of_month_equity = INITIAL_CAPITAL
         self.entry_distances: Dict[str, float] = {}
+        # Fee engine de Alpaca
+        self.fee_engine      = AlpacaFeeEngine() if _FEE_ENGINE_AVAILABLE else None
+        self.total_fees_paid = 0.0
+
+    def _get_asset_type(self, symbol: str) -> str:
+        """Detecta si el activo es crypto, forex o stock"""
+        crypto_syms = {"BTC","ETH","SOL","BNB","AVAX","MATIC","LINK","DOT","ADA",
+                       "ORDI","ZEC","LTC","LAB","BIO","ORCA","TAO","UB","TRX"}
+        if symbol in crypto_syms:
+            return "crypto"
+        if "/" in symbol:
+            return "forex"
+        return "stock"
 
     def pause(self, reason: str):
         self.status       = "PAUSED"
@@ -658,6 +683,20 @@ class Portfolio:
         if self.capital < allocation or price <= 0:
             return False
         qty = allocation / price
+
+        # Calcular y descontar fees de Alpaca en la compra
+        if self.fee_engine:
+            asset_type = self._get_asset_type(symbol)
+            fee_data   = self.fee_engine.calculate_buy_fees(symbol, price, qty, asset_type)
+            buy_fee    = fee_data["total"]
+            self.total_fees_paid += buy_fee
+            # El fee reduce el capital disponible
+            if self.capital < allocation + buy_fee:
+                buy_fee = 0.0  # si no alcanza, absorbe el fee (centavos)
+        else:
+            buy_fee    = 0.0
+            asset_type = self._get_asset_type(symbol)
+
         if symbol in self.positions:
             pos = self.positions[symbol]
             if pos["current_price"] < pos["avg_price"]:
@@ -674,14 +713,16 @@ class Portfolio:
                 "max_price_seen":  price,
                 "opened_at":       datetime.now().isoformat(),
                 "signal_type":     signal_type,
+                "asset_type":      asset_type,
             }
-        self.capital -= allocation
+        self.capital -= (allocation + buy_fee)
         self.trades.append({
             "action": "BUY", "symbol": symbol, "price": price,
             "qty": qty, "allocation": round(allocation, 2),
+            "fee": round(buy_fee, 6),
             "signal_type": signal_type, "timestamp": datetime.now().isoformat(),
         })
-        logging.info(f"[OPEN] {signal_type} {symbol} @ ${price:,.4f} | alloc: ${allocation:,.0f}")
+        logging.info(f"[OPEN] {signal_type} {symbol} @ ${price:,.4f} | alloc: ${allocation:,.0f} | fee: ${buy_fee:.4f}")
         return True
 
     def close_position(self, symbol: str, price: float, reason: str) -> Optional[float]:
@@ -690,17 +731,35 @@ class Portfolio:
         pos      = self.positions[symbol]
         proceeds = pos["qty"] * price
         cost     = pos["qty"] * pos["avg_price"]
-        pnl      = proceeds - cost
-        self.capital += proceeds
+
+        # Calcular y descontar fees de Alpaca en la venta
+        if self.fee_engine:
+            asset_type = pos.get("asset_type", self._get_asset_type(symbol))
+            fee_data   = self.fee_engine.calculate_sell_fees(
+                symbol, price, pos["qty"], asset_type,
+                shares=pos["qty"]  # para FINRA TAF
+            )
+            sell_fee = fee_data["total"]
+            self.total_fees_paid += sell_fee
+        else:
+            sell_fee   = 0.0
+            asset_type = self._get_asset_type(symbol)
+
+        # P&L neto = proceeds - costo original - fee de venta
+        net_proceeds = proceeds - sell_fee
+        pnl          = net_proceeds - cost
+
+        self.capital += net_proceeds
         self.trades.append({
             "action": "SELL", "symbol": symbol, "price": price,
             "qty": pos["qty"], "proceeds": round(proceeds, 2),
+            "sell_fee": round(sell_fee, 6),
             "pnl": round(pnl, 2), "pnl_pct": round(pnl / max(cost, 0.01) * 100, 2),
             "reason": reason, "timestamp": datetime.now().isoformat(),
         })
         self.consecutive_losses = self.consecutive_losses + 1 if pnl < 0 else 0
         del self.positions[symbol]
-        logging.info(f"[CLOSE] {reason} {symbol} @ ${price:,.4f} | P&L: ${pnl:+,.2f}")
+        logging.info(f"[CLOSE] {reason} {symbol} @ ${price:,.4f} | P&L neto: ${pnl:+,.2f} | fee: ${sell_fee:.4f}")
         return pnl
 
     def update_prices(self, prices: Dict[str, float]) -> List[dict]:
@@ -760,6 +819,9 @@ class Portfolio:
             "status":                self.status,
             "pause_reason":          self.pause_reason,
             "equity_curve":          self.equity_curve[-60:],
+            # Fees de Alpaca
+            "fees_pagados_usd":      round(self.total_fees_paid, 4),
+            "fee_breakdown":         self.fee_engine.get_summary() if self.fee_engine else {},
             "posiciones_detalle": {
                 sym: {
                     "qty":             round(p["qty"], 6),
