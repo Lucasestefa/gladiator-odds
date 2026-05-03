@@ -58,14 +58,23 @@ async def start_bot():
 @app.get("/api/bot/status")
 async def bot_status():
     if not BOT_AVAILABLE or bot is None:
-        return {"running": False, "bot_available": False, "error": "Bot no disponible — revisar logs de Railway"}
-    return {
-        "running":       bot.running,
-        "bot_available": True,
-        "summary":       bot.portfolio.get_summary(),
-        "fear_greed":    bot.macro.get("fear_greed", 0) if bot.macro else 0,
-        "cycle":         bot.cycle_count,
-    }
+        return {"running": False, "bot_available": False, "error": "Bot no disponible"}
+    try:
+        return {
+            "running":       bot.running,
+            "bot_available": True,
+            "summary":       bot.portfolio.get_summary(),
+            "fear_greed":    bot.macro.get("fear_greed", 0) if bot.macro else 0,
+            "cycle":         bot.cycle_count,
+        }
+    except Exception as e:
+        return {
+            "running":       bot.running,
+            "bot_available": True,
+            "cycle":         bot.cycle_count,
+            "status":        "iniciando — primer ciclo en progreso",
+            "error":         str(e),
+        }
 
 @app.post("/api/bot/cycle")
 async def run_cycle_manual():
