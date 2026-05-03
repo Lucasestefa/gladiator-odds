@@ -60,12 +60,23 @@ async def bot_status():
     if not BOT_AVAILABLE or bot is None:
         return {"running": False, "bot_available": False, "error": "Bot no disponible"}
     try:
+        summary = bot.portfolio.get_summary()
+        # ---- Kill switch por drawdown máximo (FIX: protección para testing) ----
+        equity = summary.get("equity_total", 50000)
+        peak   = getattr(bot.portfolio, "peak_equity", 50000)
+        if equity > peak:
+            bot.portfolio.peak_equity = equity
+        drawdown_pct = (peak - equity) / peak * 100 if peak > 0 else 0
+        if drawdown_pct >= 10 and summary.get("status") == "RUNNING":
+            bot.portfolio.pause(f"Kill switch: drawdown {drawdown_pct:.1f}% desde pico ${peak:,.0f}")
         return {
             "running":       bot.running,
             "bot_available": True,
-            "summary":       bot.portfolio.get_summary(),
+            "summary":       summary,
             "fear_greed":    bot.macro.get("fear_greed", 0) if bot.macro else 0,
             "cycle":         bot.cycle_count,
+            "drawdown_pct":  round(drawdown_pct, 2),
+            "peak_equity":   round(peak, 2),
         }
     except Exception as e:
         return {
